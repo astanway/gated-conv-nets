@@ -23,7 +23,7 @@ def chunks(l, n):
 
 with open('wiki.train.tokens') as f:
     for line in f:
-        if index == 10:
+        if index == 1000:
             break
         index += 1
         print index
@@ -100,7 +100,7 @@ def glu(filter_shape, paddings, layer_input, layer_name, res=False):
     conv2 = tf.sigmoid(tf.nn.bias_add(conv2, c))
 
     h = tf.multiply(conv1, conv2)
-    
+
     # residual layer - add input to output
     if res:
         h = tf.add(h, padded_input)
@@ -124,8 +124,8 @@ h2 = glu(filter_shape, paddings, h1a, 2)
 filter_shape = [4, 128, 1, 128]
 h3 = glu(filter_shape, paddings, h2, 3)
 
-filter_shape = [4, 128, 1, 128]
-h4 = glu(filter_shape, paddings, h3, 4)
+#filter_shape = [4, 128, 1, 128]
+#h4 = glu(filter_shape, paddings, h3, 4)
 
 # filter_shape = [4, 128, 1, 128]
 # h5 = glu(filter_shape, paddings, h4, 5)
@@ -143,8 +143,8 @@ h4 = glu(filter_shape, paddings, h3, 4)
 # h9 = glu(filter_shape, paddings, h8, 9)
 # h9 = tf.add(h8, h9) # residual layer
 
-filter_shape = [8, 128, 1, 128]
-h10 = glu(filter_shape, paddings, h4, 10)
+filter_shape = [11, 128, 1, 128]
+h10 = glu(filter_shape, paddings, h3, 10)
 
 
 def compute_loss(hidden):
@@ -159,7 +159,7 @@ def compute_loss(hidden):
     return -tf.log(output)
 
 
-# Init output weights
+# Init weights, bias, (all zeros first)
 output_embedding = tf.Variable(tf.zeros([vocab_size, 128], name="output_embedding"))
 
 # Compute average loss across minibatch
@@ -168,19 +168,20 @@ o = tf.Print(losses, [losses], summarize=128)
 loss = tf.reduce_mean(losses)
 
 # Trainer
-optimizer = tf.train.MomentumOptimizer(.1, .99)
+optimizer = tf.train.MomentumOptimizer(.2, .99)
 gvs = optimizer.compute_gradients(loss)
 capped_gvs = [(tf.clip_by_value(grad, -.01, .01), var) for grad, var in gvs]
 train_step = optimizer.apply_gradients(capped_gvs)
 
+saver = tf.train.Saver()
 sess = tf.InteractiveSession()
 tf.global_variables_initializer().run()
 
 def run():
-    for minibatch in range(0, 1000):
+    for minibatch in range(0, 10000):
         m_x = []
         m_y = []
-        for x_i in range(0, 20):
+        for x_i in range(0, 10):
             if len(x) == 0:
                 return
 
@@ -194,5 +195,8 @@ def run():
         m_y = np.array(m_y)
 
         sess.run([train_step, o], feed_dict={input_x: m_x, input_y: m_y})
+
+        if minibatch % 50 == 0:
+            saver.save(sess, 'model.ckpt', global_step=i)
 
 run()
