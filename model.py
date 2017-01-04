@@ -26,7 +26,6 @@ with open('wiki.train.tokens') as f:
         if index == 1000:
             break
         index += 1
-        print index
         l = line.lower().strip().split()
         if len(l) >= sequence_length:
             lines.append(l)
@@ -43,10 +42,7 @@ kernel_width = 4
 
 clist = [chunks(l, sequence_length + 1) for l in lines]
 
-index = 0
 for chunks in clist:
-    index += 1
-    print index
     for chunk in chunks:
         y.append(vocab_mapping[chunk[-1]])
         del chunk[-1]
@@ -69,7 +65,6 @@ paddings = [[0,0],[0,0],[0,0],[0,0]]
 def glu(filter_shape, paddings, layer_input, layer_name, res=False):
     global padded
     padded_input = tf.pad(layer_input, paddings, "CONSTANT")
-    print "padded input", padded_input
 
     W = tf.Variable(tf.truncated_normal(filter_shape, stddev=np.sqrt(1.0 / (filter_shape[0] * filter_shape[1]))), name="W%s" % layer_name)
 
@@ -146,39 +141,45 @@ h3 = glu(filter_shape, paddings, h2, 3)
 filter_shape = [11, 128, 1, 128]
 h10 = glu(filter_shape, paddings, h3, 10)
 
-
 def compute_loss(hidden):
+    """ Softmax """
     shaped = tf.squeeze(hidden)
-    total = 0.0
-
-    # Slowest part! !@#$ softmax
-    for i in range(0, vocab_size):
-        total += tf.exp(tf.reduce_sum(tf.mul(shaped, tf.nn.embedding_lookup(output_embedding, i))))
-
+    total = tf.reduce_sum(tf.map_fn(lambda x: tf.exp(tf.reduce_sum(tf.mul(shaped, x))), output_embedding))
     output = tf.exp(tf.reduce_sum(tf.mul(shaped, tf.nn.embedding_lookup(output_embedding, input_y)))) / total
     return -tf.log(output)
 
 
 # Init weights, bias, (all zeros first)
+print "init output embedding"
 output_embedding = tf.Variable(tf.zeros([vocab_size, 128], name="output_embedding"))
 
 # Compute average loss across minibatch
+print "init losses"
 losses = tf.map_fn(lambda x: compute_loss(x), h10)
 o = tf.Print(losses, [losses], summarize=128)
+print "init loss"
 loss = tf.reduce_mean(losses)
 
 # Trainer
-optimizer = tf.train.MomentumOptimizer(.2, .99)
-gvs = optimizer.compute_gradients(loss)
-capped_gvs = [(tf.clip_by_value(grad, -.01, .01), var) for grad, var in gvs]
+print "init optimizer"
+optimizer = tf.train.MomentumOptimizer(.7, .99)
+print "init gradients"
+gvs = optimizer.compute_gradients(loss, gate_gradients=0)
+print "init clipper"
+capped_gvs = [(tf.clip_by_value(grad, -1, 1), var) for grad, var in gvs]
+print "init train step"
 train_step = optimizer.apply_gradients(capped_gvs)
+print "inited."
 
 saver = tf.train.Saver()
-sess = tf.InteractiveSession()
+sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
+print "initializing..."
 tf.global_variables_initializer().run()
+print "initialized."
 
 def run():
     for minibatch in range(0, 10000):
+        print minibatch
         m_x = []
         m_y = []
         for x_i in range(0, 10):
@@ -196,7 +197,7 @@ def run():
 
         sess.run([train_step, o], feed_dict={input_x: m_x, input_y: m_y})
 
-        if minibatch % 50 == 0:
+        if minibatch % 20 == 0:
             saver.save(sess, 'model.ckpt', global_step=i)
 
 run()
