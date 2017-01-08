@@ -38,8 +38,9 @@ def get_data(test=False):
     lines = []
 
     # Open both train and test data so that they can share a unified vocabulary
-    with open('wiki.train.tokens') as f:
+    with open('big.wiki.train.tokens') as f:
         for line in f:
+            line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
                 if not test: # Add the data to lines if it isn't a test
@@ -47,8 +48,9 @@ def get_data(test=False):
                 for w in l:
                     vocabulary.add(w)
 
-    with open('wiki.test.tokens') as f:
+    with open('big.wiki.test.tokens') as f:
         for line in f:
+            line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
                 if test: # Add data to lines if this is a test run
@@ -158,14 +160,10 @@ def init_vars():
     output_embedding_size = 1024
     filter_shape = [1, 5, 512, 2]
     h10 = glu(filter_shape, h4, 10, last_layer=True)
-    # Remove the first element, we don't predict it.
+    # Remove the last element, as the next word is in a new sequence and we do not predict it
     # Todo: this isn't really right
-    h10 = tf.slice(h10, [0, 0, 1, 0], [-1, -1, -1, -1])
+    h10 = tf.slice(h10, [0, 0, 0, 0], [-1, -1, sequence_length-1, -1])
     h10 = tf.squeeze(h10)
-
-    #print h10
-
-
 
     def compute_sampled_softmax(hidden):
         labels = tf.cast(hidden[:, -1], tf.int64)
@@ -205,31 +203,32 @@ def init_vars():
     output_embedding = tf.Variable(tf.random_normal([vocab_size, output_embedding_size], stddev=.001), name="output_embedding")
     output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
 
-    # Compute average loss across minibatch
+    # Concate the labels onto the context index and send off to be evaluated
     concated = tf.concat(2, [h10, tf.expand_dims(input_y, 2)])
 
+    losses = tf.map_fn(lambda sequence: compute_sampled_softmax(sequence), concated)
+    loss = tf.reduce_mean(losses)
+
+    sum_losses = tf.map_fn(lambda sequence_loss: tf.reduce_sum(sequence_loss), losses)
+    batch_perplexities = tf.map_fn(lambda sum_loss: tf.exp(1.0/sequence_length) * sum_loss, sum_losses)
+    perplexity = tf.reduce_mean(batch_perplexities)
+    p = tf.Print(perplexity, [perplexity], summarize=5000, message="perplexity")
+    l = tf.Print(loss, [loss], summarize=5000, message="loss")
+
     if train:
-        losses = tf.map_fn(lambda sequence: compute_sampled_softmax(sequence), concated)
-        loss = tf.reduce_mean(losses)
-        o = tf.Print(loss, [loss], summarize=5000, message="loss")
         optimizer = tf.train.MomentumOptimizer(.5, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
-        train_step = optimizer.apply_gradients(capped_gvs)
-        return train_step, o
+        global_step = tf.Variable(0, name='global_step', trainable=False)
+        train_step = optimizer.apply_gradients(capped_gvs, global_step)
+        return train_step, global_step, p, l
     else:
-        sum_losses = tf.map_fn(lambda sequence: compute_sampled_softmax(sequence), concated)
-        #sum_losses = tf.map_fn(lambda sequence: tf.reduce_sum(tf.map_fn(lambda word: compute_sampled_softmax(word), sequence)), concated)
-        batch_perplexities = tf.map_fn(lambda sum_loss: tf.exp(1.0/sequence_length) * sum_loss, sum_losses)
-        perplexity = tf.reduce_mean(batch_perplexities)
-        o = tf.Print(batch_perplexities, [batch_perplexities], summarize=5000, message="loss")
-        return batch_perplexities, o
-
+        return p, l
 
 def run():
     if train:
         x, y = get_data()
-        train_step, o = init_vars()
+        train_step, global_step, p, l = init_vars()
         saver = tf.train.Saver()
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
         tf.global_variables_initializer().run()
@@ -237,7 +236,7 @@ def run():
     else:
         x, y = get_data(test=True)
         ckpt = tf.train.get_checkpoint_state('.')
-        batch_perplexities, o = init_vars()
+        p, l = init_vars()
         saver = tf.train.Saver()
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
         saver.restore(sess, ckpt.model_checkpoint_path)
@@ -270,12 +269,11 @@ def run():
                 break
 
             if train:
-                sess.run([train_step, o], feed_dict={input_x: m_x, input_y: m_y})
+                sess.run([train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
+                if minibatch % 100 == 0:
+                    saver.save(sess, 'model.ckpt', global_step=global_step)
             else:
-                sess.run([batch_perplexities, o], feed_dict={input_x: m_x, input_y: m_y})
-        # Save once per epoch
-        if train:
-            saver.save(sess, 'model.ckpt', global_step=epoch)
+                sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
 
 run()
 # to test perpleity, feed each sequence into the model and then add up the final scores.
