@@ -70,32 +70,32 @@ def get_data(test=False):
 
     return x, y
 
-o = tf.Print(train, [train])
 input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
 input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
 
 def init_vars():
 
     # Embedding layer
-    Wembedding= tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.01), name="Wembedding")
-    embedded_words = tf.nn.embedding_lookup(Wembedding, input_x)
-    embedded_words_expanded = tf.expand_dims(embedded_words, 1) # give it height of 1
+    all_word_embeddings= tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.01), name="all_word_embeddings")
+    input_embeddings = tf.nn.embedding_lookup(all_word_embeddings, input_x)
+    input_embeddings_expanded = tf.expand_dims(input_embeddings, 1) # give it height of 1
 
     def glu(filter_shape, layer_input, layer_name, res=False, last_layer=False):
-        global padded
+        # Pad the left side to prevent kernels from viewing future context
         kernel_width = filter_shape[1]
         left_pad = kernel_width - 1
         paddings = [[0,0],[0,0],[left_pad,0],[0,0]]
         padded_input = tf.pad(layer_input, paddings, "CONSTANT")
 
-        W = tf.Variable(tf.random_normal(filter_shape, stddev=np.sqrt(2.0 / (filter_shape[0] * filter_shape[1]))), name="W%s" % layer_name)
-
+        # Idea: kernel masking instead of padding input?
         # mask the kernel to future words from leaking into the kernel
         #center_w = filter_shape[1] // 2
         #mask = np.ones((filter_shape), dtype=np.float32)
         #mask[:, center_w+1: ,: ,:] = 0.
         #W *= tf.constant(mask, dtype=tf.float32)
 
+        # First convolutional layer
+        W = tf.Variable(tf.random_normal(filter_shape, stddev=np.sqrt(2.0 / (filter_shape[0] * filter_shape[1]))), name="W%s" % layer_name)
         b = tf.Variable(tf.zeros(shape=[filter_shape[2] * filter_shape[3]]), name="b%s" % layer_name)
         conv1 = tf.nn.depthwise_conv2d(
             padded_input,
@@ -103,9 +103,9 @@ def init_vars():
             strides=[1, 1, 1, 1],
             padding="VALID",
             name="conv1")
-
         conv1 = tf.nn.bias_add(conv1, b)
 
+        # Gating sigmoid layer
         V = tf.Variable(tf.random_normal(filter_shape, stddev=np.sqrt(2.0 / (filter_shape[0] * filter_shape[1]))), name="V%s" % layer_name)
         c = tf.Variable(tf.zeros(shape=[filter_shape[2] * filter_shape[3]]), name="c%s" % layer_name)
         conv2 = tf.nn.depthwise_conv2d(
@@ -124,10 +124,9 @@ def init_vars():
 
         return h
 
-
     # [filter_height, filter_width, in_channels, out_channels]
     filter_shape = [1, 3, embedding_size, 1]
-    h1 = glu(filter_shape, embedded_words_expanded, 1)
+    h1 = glu(filter_shape, input_embeddings_expanded, 1)
 
     filter_shape = [1, 3, 128, 1]
     h1a = glu(filter_shape, h1, 2)
@@ -166,6 +165,7 @@ def init_vars():
     h10 = tf.squeeze(h10)
 
     def compute_sampled_softmax(hidden):
+        """ Compute sampled softmax for training"""
         labels = tf.cast(hidden[:, -1], tf.int64)
         labels = tf.expand_dims(labels, 1)
         hidden = tf.slice(hidden, [0, 0], [-1, output_embedding_size])
