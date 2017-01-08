@@ -12,6 +12,12 @@ from collections import defaultdict
 
 # Placeholders for input, output and dropout
 
+# Bug in TF sampled softmax implementation
+@tf.RegisterGradient("LogUniformCandidateSampler")
+def _LogUniformCandidateSamplerGrad(op,grad,foo,bar):
+  return [tf.cast(tf.zeros_like(foo), tf.int64)]
+
+
 vocabulary = set()
 vocab_mapping = {}
 sequence_length = 20
@@ -160,139 +166,13 @@ def init_vars():
     #print h10
 
 
-    def _sum_rows(x):
-      """Returns a vector summing up each row of the matrix x."""
-      # _sum_rows(x) is equivalent to tf.reduce_sum(x, 1) when x is
-      # a matrix.  The gradient of _sum_rows(x) is more efficient than
-      # reduce_sum(x, 1)'s gradient in today's implementation. Therefore,
-      # we use _sum_rows(x) in the nce_loss() computation since the loss
-      # is mostly used for training.
-      cols = tf.shape(x)[1]
-      ones_shape = tf.pack([cols, 1])
-      ones = tf.ones(ones_shape, x.dtype)
-      return tf.reshape(tf.matmul(x, ones), [-1])
 
     def compute_sampled_softmax(hidden):
         labels = tf.cast(hidden[:, -1], tf.int64)
         labels = tf.expand_dims(labels, 1)
         hidden = tf.slice(hidden, [0, 0], [-1, output_embedding_size])
-
-        #### BEGIN SHITSHOW ####
-        subtract_log_q = True
-        remove_accidental_hits = True
-        num_sampled=25
-        num_true = 1
-        labels_flat = tf.reshape(labels, [-1])
-
-        # Sample the negative labels.
-        #   sampled shape: [num_sampled] tensor
-        #   true_expected_count shape = [batch_size, 1] tensor
-        #   sampled_expected_count shape = [num_sampled] tensor
-        sampled_values = tf.nn.log_uniform_candidate_sampler(
-              true_classes=labels,
-              num_true=1,
-              num_sampled=25,
-              unique=True,
-              range_max=vocab_size)
-        # NOTE: pylint cannot tell that 'sampled_values' is a sequence
-        # pylint: disable=unpacking-non-sequence
-        sampled, true_expected_count, sampled_expected_count = sampled_values
-        # pylint: enable=unpacking-non-sequence
-
-        # labels_flat is a [batch_size * num_true] tensor
-        # sampled is a [num_sampled] int tensor
-        all_ids = tf.concat(0, [labels_flat, sampled])
-
-        # weights shape is [num_classes, dim]
-        all_w = tf.nn.embedding_lookup(
-            output_embedding, all_ids)
-        all_b = tf.nn.embedding_lookup(output_bias, all_ids)
-        # true_w shape is [batch_size * num_true, dim]
-        # true_b is a [batch_size * num_true] tensor
-        true_w = tf.slice(
-            all_w, [0, 0], tf.pack([tf.shape(labels_flat)[0], -1]))
-        true_b = tf.slice(all_b, [0], tf.shape(labels_flat))
-
-        # inputs shape is [batch_size, dim]
-        # true_w shape is [batch_size * num_true, dim]
-        # row_wise_dots is [batch_size, num_true, dim]
-        dim = tf.shape(true_w)[1:2]
-        new_true_w_shape = tf.concat(0, [[-1, 1], dim])
-        row_wise_dots = tf.mul(
-            tf.expand_dims(hidden, 1),
-            tf.reshape(true_w, new_true_w_shape))
-        # We want the row-wise dot plus biases which yields a
-        # [batch_size, num_true] tensor of true_logits.
-        dots_as_matrix = tf.reshape(row_wise_dots,
-                                           tf.concat(0, [[-1], dim]))
-        true_logits = tf.reshape(_sum_rows(dots_as_matrix), [-1, 1])
-        true_b = tf.reshape(true_b, [-1, 1])
-        true_logits += true_b
-
-        # Lookup weights and biases for sampled labels.
-        #   sampled_w shape is [num_sampled, dim]
-        #   sampled_b is a [num_sampled] float tensor
-        sampled_w = tf.slice(
-            all_w, tf.pack([tf.shape(labels_flat)[0], 0]), [-1, -1])
-        sampled_b = tf.slice(all_b, tf.shape(labels_flat), [-1])
-
-        # inputs has shape [batch_size, dim]
-        # sampled_w has shape [num_sampled, dim]
-        # sampled_b has shape [num_sampled]
-        # Apply X*W'+B, which yields [batch_size, num_sampled]
-        sampled_logits = tf.matmul(
-            hidden, sampled_w, transpose_b=True) + sampled_b
-
-
-        if remove_accidental_hits:
-          acc_hits = tf.nn.compute_accidental_hits(
-              labels, sampled, num_true=num_true)
-          acc_indices, acc_ids, acc_weights = acc_hits
-
-          # This is how SparseToDense expects the indices.
-          acc_indices_2d = tf.reshape(acc_indices, [-1, 1])
-          acc_ids_2d_int32 = tf.reshape(
-              tf.cast(acc_ids, tf.int32), [-1, 1])
-          sparse_indices = tf.concat(1, [acc_indices_2d, acc_ids_2d_int32],
-                                            "sparse_indices")
-          # Create sampled_logits_shape = [batch_size, num_sampled]
-          sampled_logits_shape = tf.concat(
-              0,
-              [tf.shape(labels)[:1], tf.expand_dims(num_sampled, 0)])
-          if sampled_logits.dtype != acc_weights.dtype:
-            acc_weights = tf.cast(acc_weights, sampled_logits.dtype)
-          sampled_logits += tf.sparse_to_dense(
-              sparse_indices,
-              sampled_logits_shape,
-              acc_weights,
-              default_value=0.0,
-              validate_indices=False)
-
-        if subtract_log_q:
-          # Subtract log of Q(l), prior probability that l appears in sampled.
-          true_logits -= tf.log(true_expected_count)
-          sampled_logits -= tf.log(sampled_expected_count)
-
-        # Construct output logits and labels. The true labels/logits start at col 0.
-        out_logits = tf.concat(1, [true_logits, sampled_logits])
-        # true_logits is a float tensor, ones_like(true_logits) is a float tensor
-        # of ones. We then divide by num_true to ensure the per-example labels sum
-        # to 1.0, i.e. form a proper probability distribution.
-        out_labels = tf.concat(1,
-                                      [tf.ones_like(true_logits) / num_true,
-                                       tf.zeros_like(sampled_logits)])
-
-
-        # output_embedding =  168 10
-        #tf.matmul(hidden, output_embedding, transpose_b=True)
-        # This wants 1 by 10, not 19 by ten.
-        #losses = tf.nn.sampled_softmax_loss(output_embedding, output_bias, full_labels, hidden, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
-
-
-
-        sampled_losses = tf.nn.softmax_cross_entropy_with_logits(out_logits, out_labels)
-        # sampled_losses is a [batch_size] tensor.
-        return sampled_losses
+        losses = tf.nn.sampled_softmax_loss(output_embedding, output_bias, hidden, labels, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+        return losses
 
     def compute_full_softmax(word):
         # Extract the label that we sent earlier
@@ -321,10 +201,6 @@ def init_vars():
         # predicted_word_prob = probs[tf.cast(predicted_word, tf.int32)]
 
         return -tf.log(labeled_prob)
-
-    @tf.RegisterGradient("LogUniformCandidateSampler")
-    def _LogUniformCandidateSamplerGrad(op,grad,foo,bar):
-      return [tf.cast(tf.zeros_like(foo), tf.int64)]
 
     output_embedding = tf.Variable(tf.random_normal([vocab_size, output_embedding_size], stddev=.001), name="output_embedding")
     output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
