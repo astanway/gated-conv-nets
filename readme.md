@@ -2,9 +2,10 @@ This implements a sigmoid gated convolutional network, as per https://arxiv.org/
 
 ![x](https://raw.githubusercontent.com/astanway/gated-conv-nets/master/arch.png)
 
-To run: `python model.py --train True`
+## To run
+`python model.py --train True`
 
-Discussion:
+## Discussion:
   The general technique in this paper is an attempt to set up a convolutional network to achieve the same sorts of things an LSTM or RNN is traditionally good at, while taking advantage of the CNNs non-temporal nature to effect big speed gains. For the language modeling task, this means that the inputs are a sequence of learned word embeddings, and the outputs are that same sequence, but shifted to the left. The final output embedding for a word (a vector within the final hidden layer) is thus trying to predict the word in front of it, a probability which is calculated with the softmax for each vector in the final hidden layer.
 
   In this way, all output projections are computed simultaneously through the convolutional layers. Care must be taken to properly pad the inputs such that each convolution kernel cannot see any context in front of it, as this would constitute data leakage.
