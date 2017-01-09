@@ -19,6 +19,7 @@ FLAGS = flags.FLAGS
 sequence_length = 20
 embedding_size = 128
 minibatch_size = 750
+candidates = 200
 
 def get_data():
     def chunks(l, n):
@@ -117,10 +118,11 @@ def glu(kernel_shape, layer_input, layer_name):
 
 def compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
     """ Compute sampled softmax for training"""
+    global candidates
     labels = tf.cast(sequence[:, -1], tf.int64)
     labels = tf.expand_dims(labels, 1)
     sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
-    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 200, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, candidates, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
     return losses
 
 #def compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
@@ -230,6 +232,7 @@ if __name__=="__main__":
 
     for epoch in range(0, 50):
         print "epoch  %s" % epoch
+        candidates = 200
         indices = range(0, len(x))
         for minibatch in range(0, len(x)):
             print "%s/%s" % (minibatch, len(indices)/minibatch_size)
@@ -259,7 +262,9 @@ if __name__=="__main__":
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
 
         # Run the validation set on model to get validation perplexity for this epoch
+        # Break after one run for now. TODO: proper softmax loss instead of messing with the candidate size
         if FLAGS.train:
+            candidates = len(vocab_mapping)
             print "validation perplexity:"
             indices = range(0, len(v_x))
             for minibatch in range(0, len(v_x)):
@@ -283,3 +288,4 @@ if __name__=="__main__":
                     break
 
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+                break
