@@ -6,33 +6,26 @@ import numpy as np
 import random
 from collections import defaultdict
 
-#https://arxiv.org/pdf/1611.09482v1.pdf
-# https://arxiv.org/pdf/1612.08083v1.pdf
-#https://arxiv.org/pdf/1308.0850v5.pdf
-
-# Placeholders for input, output and dropout
-
 # Bug in TF sampled softmax implementation
 @tf.RegisterGradient("LogUniformCandidateSampler")
 def _LogUniformCandidateSamplerGrad(op,grad,foo,bar):
   return [tf.cast(tf.zeros_like(foo), tf.int64)]
 
+flags = tf.flags
+flags.DEFINE_bool("train", True, "Train the model or run it on the test set only")
+FLAGS = flags.FLAGS
 
-vocabulary = set()
-vocab_mapping = {}
+# Config
 sequence_length = 20
-vocab_size = 1
 embedding_size = 128
 minibatch_size = 750
-train = True
 
-def get_data(test=False):
+def get_data():
     def chunks(l, n):
         """Yield successive n-sized chunks from l."""
         return [l[i:i + n] for i in range(0, len(l)) if len(l[i:i + n]) == n]
 
-    global vocab_size
-    global vocabulary
+    vocabulary = set()
     y = []
     x = []
     lines = []
@@ -43,7 +36,7 @@ def get_data(test=False):
             line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
-                if not test: # Add the data to lines if it isn't a test
+                if FLAGS.train: # Add the data to lines we are training
                     lines.append(l)
                 for w in l:
                     vocabulary.add(w)
@@ -53,7 +46,7 @@ def get_data(test=False):
             line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
-                if test: # Add data to lines if this is a test run
+                if not FLAGS.train: # Add data to lines if this is a test run
                     lines.append(l)
                 for w in l:
                     vocabulary.add(w)
@@ -68,61 +61,54 @@ def get_data(test=False):
             del chunk[0]
             y.append([vocab_mapping[word] for word in chunk])
 
-    return x, y
+    return x, y, vocab_mapping
 
-input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
-input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
+def glu(kernel_shape, layer_input, layer_name):
+    """ Gated Linear Unit """
+    # Pad the left side to prevent kernels from viewing future context
+    kernel_width = kernel_shape[1]
+    left_pad = kernel_width - 1
+    paddings = [[0,0],[0,0],[left_pad,0],[0,0]]
+    padded_input = tf.pad(layer_input, paddings, "CONSTANT")
 
-def init_vars():
-    def glu(kernel_shape, layer_input, layer_name):
-        # Pad the left side to prevent kernels from viewing future context
-        kernel_width = kernel_shape[1]
-        left_pad = kernel_width - 1
-        paddings = [[0,0],[0,0],[left_pad,0],[0,0]]
-        padded_input = tf.pad(layer_input, paddings, "CONSTANT")
+    # First convolutional layer, Kaiming intialization
+    W = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="W%s" % layer_name)
+    b = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
+    conv1 = tf.nn.depthwise_conv2d(
+        padded_input,
+        W,
+        strides=[1, 1, 1, 1],
+        padding="VALID",
+        name="conv1")
+    conv1 = tf.nn.bias_add(conv1, b)
 
-        # Idea: kernel masking instead of padding input?
-        # mask the kernel to future words from leaking into the kernel
-        #center_w = kernel_shape[1] // 2
-        #mask = np.ones((kernel_shape), dtype=np.float32)
-        #mask[:, center_w+1: ,: ,:] = 0.
-        #W *= tf.constant(mask, dtype=tf.float32)
+    # Gating sigmoid layer, Kaiming intialization
+    V = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="V%s" % layer_name)
+    c = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
+    conv2 = tf.nn.depthwise_conv2d(
+        padded_input,
+        V,
+        strides=[1, 1, 1, 1],
+        padding="VALID",
+        name="conv2")
+    conv2 = tf.sigmoid(tf.nn.bias_add(conv2, c))
 
-        # First convolutional layer
-        W = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="W%s" % layer_name)
-        b = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
-        conv1 = tf.nn.depthwise_conv2d(
-            padded_input,
-            W,
-            strides=[1, 1, 1, 1],
-            padding="VALID",
-            name="conv1")
-        conv1 = tf.nn.bias_add(conv1, b)
+    h = tf.multiply(conv1, conv2)
 
-        # Gating sigmoid layer
-        V = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="V%s" % layer_name)
-        c = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
-        conv2 = tf.nn.depthwise_conv2d(
-            padded_input,
-            V,
-            strides=[1, 1, 1, 1],
-            padding="VALID",
-            name="conv2")
-        conv2 = tf.sigmoid(tf.nn.bias_add(conv2, c))
+    return h
 
-        h = tf.multiply(conv1, conv2)
+def compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
+    """ Compute sampled softmax for training"""
+    labels = tf.cast(sequence[:, -1], tf.int64)
+    labels = tf.expand_dims(labels, 1)
+    sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
+    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+    return losses
 
-        return h
-
-    def compute_sampled_softmax(hidden):
-        """ Compute sampled softmax for training"""
-        labels = tf.cast(hidden[:, -1], tf.int64)
-        labels = tf.expand_dims(labels, 1)
-        hidden = tf.slice(hidden, [0, 0], [-1, output_embedding_size])
-        losses = tf.nn.sampled_softmax_loss(output_embedding, output_bias, hidden, labels, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
-        return losses
-
+def setup_model(vocab_mapping):
+    """ Setup the model after we have imported the data and know the vocabulary size """
     # Embedding layer
+    vocab_size = len(vocab_mapping)
     all_word_embeddings = tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.01), name="all_word_embeddings")
     input_embeddings = tf.nn.embedding_lookup(all_word_embeddings, input_x)
     input_embeddings_expanded = tf.expand_dims(input_embeddings, 1) # give it height of 1
@@ -157,8 +143,8 @@ def init_vars():
     last_hidden = glu(kernel_shape, h6, 8)
 
     # Output word embeddings. Note: these are not the same as the input word embeddings.
-    output_embedding_size = kernel_shape[2] * kernel_shape[3]
-    output_embedding = tf.Variable(tf.random_normal([vocab_size, output_embedding_size], stddev=.001), name="output_embedding")
+    output_weights_size = kernel_shape[2] * kernel_shape[3]
+    output_weights = tf.Variable(tf.random_normal([vocab_size, output_weights_size], stddev=.001), name="output_weights")
     output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
 
     # Remove the last element, as the next word is in a new sequence and we do not predict it
@@ -168,8 +154,8 @@ def init_vars():
     # Concat the labels onto the context index and send off to be evaluated
     concated = tf.concat(2, [last_hidden, tf.expand_dims(input_y, 2)])
 
-    # Evaluate losses with a sammpled softmax
-    losses = tf.map_fn(lambda sequence: compute_sampled_softmax(sequence), concated)
+    # Evaluate losses with a sampled softmax
+    losses = tf.map_fn(lambda sequence: compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
     loss = tf.reduce_mean(losses)
 
     # Find the perplexity
@@ -181,7 +167,7 @@ def init_vars():
 
     # If we are training a model, proceed to optimize gradients and backprop.
     # Gradient clipping set to -.1, .1.
-    if train:
+    if FLAGS.train:
         optimizer = tf.train.MomentumOptimizer(.5, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
@@ -191,25 +177,27 @@ def init_vars():
     else:
         return p, l
 
-def run():
-    if train:
-        x, y = get_data()
-        train_step, global_step, p, l = init_vars()
+if __name__=="__main__":
+    input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
+    input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
+    x, y, vocab_mapping = get_data()
+
+    if FLAGS.train:
+        train_step, global_step, p, l = setup_model(vocab_mapping)
         saver = tf.train.Saver()
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
         tf.global_variables_initializer().run()
 
     else:
-        x, y = get_data(test=True)
-        ckpt = tf.train.get_checkpoint_state('.')
-        p, l = init_vars()
+        p, l = setup_model(vocab_mapping)
         saver = tf.train.Saver()
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
+        ckpt = tf.train.get_checkpoint_state('.')
         saver.restore(sess, ckpt.model_checkpoint_path)
 
     print minibatch_size
     print len(x) / minibatch_size
-    print len(vocabulary)
+    print len(vocab_mapping)
 
     for epoch in range(0, 50):
         print "epoch  %s" % epoch
@@ -234,13 +222,9 @@ def run():
             if len(m_x) < minibatch_size:
                 break
 
-            if train:
+            if FLAGS.train:
                 sess.run([train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
                 if minibatch % 100 == 0:
                     saver.save(sess, 'model.ckpt', global_step=global_step)
             else:
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
-
-run()
-# to test perpleity, feed each sequence into the model and then add up the final scores.
-# output: not one word, n-1 words. so you can pad. don't need to reuce dimensionarliy of sequence length.
