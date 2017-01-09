@@ -120,8 +120,16 @@ def compute_sampled_softmax(output_weights, output_bias, sequence, output_weight
     labels = tf.cast(sequence[:, -1], tf.int64)
     labels = tf.expand_dims(labels, 1)
     sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
-    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 200, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
     return losses
+
+#def compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
+#    """ Compute sampled softmax for training"""
+#    labels = tf.cast(sequence[:, -1], tf.int64)
+#    labels = tf.expand_dims(labels, 1)
+#    sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
+#    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 50, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+#    return losses
 
 def setup_model(vocab_mapping, epoch_steps):
     """ Setup the model after we have imported the data and know the vocabulary size """
@@ -175,13 +183,14 @@ def setup_model(vocab_mapping, epoch_steps):
     # Evaluate losses with a sampled softmax
     losses = tf.map_fn(lambda sequence: compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
     loss = tf.reduce_mean(losses)
+    l = tf.Print(loss, [loss], summarize=5000, message="loss")
 
     # Find the perplexity
-    sum_losses = tf.map_fn(lambda sequence_loss: tf.reduce_sum(sequence_loss), losses)
-    batch_perplexities = tf.map_fn(lambda sum_loss: tf.exp(1.0/sequence_length) * sum_loss, sum_losses)
+    #full_losses = tf.map_fn(lambda sequence: compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
+    #full_loss = tf.reduce_mean(full_losses)
+    batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
     perplexity = tf.reduce_mean(batch_perplexities)
     p = tf.Print(perplexity, [perplexity], summarize=5000, message="perplexity")
-    l = tf.Print(loss, [loss], summarize=5000, message="loss")
 
     # If we are training a model, proceed to optimize gradients and backprop.
     # Gradient clipping set to -.1, .1.
@@ -249,8 +258,7 @@ if __name__=="__main__":
             else:
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
 
-        # Run one minibatch of the validation set on model to get validation perplexity for this epoch
-        # For full validation, run it all.
+        # Run the validation set on model to get validation perplexity for this epoch
         if FLAGS.train:
             print "validation perplexity:"
             indices = range(0, len(v_x))
