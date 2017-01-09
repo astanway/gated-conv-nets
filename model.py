@@ -105,7 +105,7 @@ def compute_sampled_softmax(output_weights, output_bias, sequence, output_weight
     losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 25, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
     return losses
 
-def setup_model(vocab_mapping):
+def setup_model(vocab_mapping, epoch_steps):
     """ Setup the model after we have imported the data and know the vocabulary size """
     # Embedding layer
     vocab_size = len(vocab_mapping)
@@ -168,10 +168,11 @@ def setup_model(vocab_mapping):
     # If we are training a model, proceed to optimize gradients and backprop.
     # Gradient clipping set to -.1, .1.
     if FLAGS.train:
-        optimizer = tf.train.MomentumOptimizer(.5, .99)
+        global_step = tf.Variable(0, name='global_step', trainable=False)
+        learning_rate = tf.train.exponential_decay(0.5, global_step, epoch_steps, 0.8, staircase=True) # decay the learning every epoch
+        optimizer = tf.train.MomentumOptimizer(learning_rate, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
-        global_step = tf.Variable(0, name='global_step', trainable=False)
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
         return train_step, global_step, p, l
     else:
@@ -182,8 +183,13 @@ if __name__=="__main__":
     input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
     x, y, vocab_mapping = get_data()
 
+    print minibatch_size
+    print len(x) / minibatch_size
+    print len(vocab_mapping)
+    epoch_steps = len(x) / minibatch_size
+
     if FLAGS.train:
-        train_step, global_step, p, l = setup_model(vocab_mapping)
+        train_step, global_step, p, l = setup_model(vocab_mapping, epoch_steps)
         saver = tf.train.Saver()
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
         tf.global_variables_initializer().run()
@@ -194,10 +200,6 @@ if __name__=="__main__":
         sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
         ckpt = tf.train.get_checkpoint_state('.')
         saver.restore(sess, ckpt.model_checkpoint_path)
-
-    print minibatch_size
-    print len(x) / minibatch_size
-    print len(vocab_mapping)
 
     for epoch in range(0, 50):
         print "epoch  %s" % epoch
