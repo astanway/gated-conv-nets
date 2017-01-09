@@ -26,11 +26,14 @@ def get_data():
         return [l[i:i + n] for i in range(0, len(l)) if len(l[i:i + n]) == n]
 
     vocabulary = set()
+    lines = []
     y = []
     x = []
-    lines = []
+    vlines = []
+    v_x = []
+    v_y = []
 
-    # Open both train and test data so that they can share a unified vocabulary
+    # Open train, test, and validation data so that they can share a unified vocabulary and model
     with open('wiki.train.tokens') as f:
         for line in f:
             line = "<S> " + line + " </S>"
@@ -38,6 +41,16 @@ def get_data():
             if len(l) >= sequence_length:
                 if FLAGS.train: # Add the data to lines we are training
                     lines.append(l)
+                for w in l:
+                    vocabulary.add(w)
+
+    with open('wiki.valid.tokens') as f:
+        for line in f:
+            line = "<S> " + line + " </S>"
+            l = line.lower().strip().split()
+            if len(l) >= sequence_length:
+                if FLAGS.train: # Add data to lines if this is a test run
+                    vlines.append(l)
                 for w in l:
                     vocabulary.add(w)
 
@@ -54,14 +67,19 @@ def get_data():
     vocab_mapping = {i:x for x, i in enumerate(vocabulary)}
     vocab_size = len(vocabulary)
     clist = [chunks(l, sequence_length) for l in lines]
-
-    for chunks in clist:
-        for chunk in chunks:
+    for c in clist:
+        for chunk in c:
             x.append([vocab_mapping[word] for word in chunk])
             del chunk[0]
             y.append([vocab_mapping[word] for word in chunk])
 
-    return x, y, vocab_mapping
+    vlist = [chunks(v, sequence_length) for v in vlines]
+    for c in vlist:
+        for chunk in c:
+            v_x.append([vocab_mapping[word] for word in chunk])
+            del chunk[0]
+            v_y.append([vocab_mapping[word] for word in chunk])
+    return x, y, v_x, v_y, vocab_mapping
 
 def glu(kernel_shape, layer_input, layer_name):
     """ Gated Linear Unit """
@@ -169,7 +187,7 @@ def setup_model(vocab_mapping, epoch_steps):
     # Gradient clipping set to -.1, .1.
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.exponential_decay(0.5, global_step, epoch_steps, 0.8, staircase=True) # decay the learning every epoch
+        learning_rate = tf.train.exponential_decay(0.6, global_step, epoch_steps, 0.8, staircase=True) # decay the learning every epoch
         optimizer = tf.train.MomentumOptimizer(learning_rate, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
@@ -181,7 +199,7 @@ def setup_model(vocab_mapping, epoch_steps):
 if __name__=="__main__":
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
     input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
-    x, y, vocab_mapping = get_data()
+    x, y, v_x, v_y, vocab_mapping = get_data()
 
     print minibatch_size
     print len(x) / minibatch_size
@@ -229,4 +247,31 @@ if __name__=="__main__":
                 if minibatch % 100 == 0:
                     saver.save(sess, 'model.ckpt', global_step=global_step)
             else:
+                sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+
+        # Run one minibatch of the validation set on model to get validation perplexity for this epoch
+        # For full validation, run it all.
+        if FLAGS.train:
+            print "validation perplexity:"
+            indices = range(0, len(v_x))
+            for minibatch in range(0, len(v_x)):
+                print "%s/%s" % (minibatch, len(indices)/minibatch_size)
+                m_x = []
+                m_y = []
+                for x_i in range(0, minibatch_size):
+                    if len(indices) == 0:
+                        break
+
+                    index = random.randrange(len(indices))
+
+                    m_x.append(v_x[index])
+                    m_y.append(v_y[index])
+                    del indices[index]
+
+                m_x = np.array(m_x)
+                m_y = np.array(m_y)
+
+                if len(m_x) < minibatch_size:
+                    break
+
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
