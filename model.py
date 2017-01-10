@@ -191,9 +191,9 @@ def setup_model(vocab_mapping, epoch_steps):
         losses = tf.map_fn(lambda sequence: compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
         loss = tf.reduce_mean(losses)
 
-        # Calculate batch perplexities across the full softmax if we are validating or testing
-        batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
-        perplexity = tf.reduce_mean(batch_perplexities)
+    # Calculate batch perplexities across the full softmax if we are validating or testing
+    batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
+    perplexity = tf.reduce_mean(batch_perplexities)
 
     l = tf.Print(loss, [loss], summarize=5000, message="loss")
     p = tf.Print(perplexity, [perplexity], summarize=5000, message="perplexity")
@@ -260,8 +260,27 @@ if __name__=="__main__":
 
             if FLAGS.train:
                 sess.run([train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                if minibatch % 100 == 0:
+                if minibatch % 25 == 0:
                     saver.save(sess, 'model.ckpt', global_step=global_step)
+
+		    # CHeck validation accuracy every 100 steps
+                    validating = True
+                    print "validation perplexity:"
+                    vindices = range(0, len(v_x))
+                    m_x = []
+                    m_y = []
+
+                    for x_i in range(0, minibatch_size):
+                        vindex = random.randrange(len(vindices))
+                        m_x.append(v_x[vindex])
+                        m_y.append(v_y[vindex])
+                        del vindices[vindex]
+
+                    m_x = np.array(m_x)
+                    m_y = np.array(m_y)
+
+                    sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+                    validating = False
             else:
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
 
@@ -269,7 +288,7 @@ if __name__=="__main__":
         # Break after one run for now. TODO: proper softmax loss instead of messing with the candidate size
         if FLAGS.train:
             validating = True
-            print "validation perplexity:"
+            print "full validation perplexity:"
             indices = range(0, len(v_x))
             for minibatch in range(0, len(v_x)):
                 print "%s/%s" % (minibatch, len(indices)/minibatch_size)
@@ -292,4 +311,4 @@ if __name__=="__main__":
                     break
 
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
-                break
+            validating = False
