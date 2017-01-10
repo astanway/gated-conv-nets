@@ -19,7 +19,8 @@ FLAGS = flags.FLAGS
 sequence_length = 20
 embedding_size = 128
 minibatch_size = 750
-candidates = 200
+candidates = 500
+validating = False
 
 def get_data():
     def chunks(l, n):
@@ -121,17 +122,17 @@ def compute_sampled_softmax(output_weights, output_bias, sequence, output_weight
     global candidates
     labels = tf.cast(sequence[:, -1], tf.int64)
     labels = tf.expand_dims(labels, 1)
-    sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
+    sequence = tf.slice(sequence, [0, 0], [-1, output_weights_size])
     losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, candidates, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
     return losses
 
-#def compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
-#    """ Compute sampled softmax for training"""
-#    labels = tf.cast(sequence[:, -1], tf.int64)
-#    labels = tf.expand_dims(labels, 1)
-#    sequence= tf.slice(sequence, [0, 0], [-1, output_weights_size])
-#    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, 50, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
-#    return losses
+def compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
+    """ Compute full softmax for testing and validation"""
+    labels = tf.cast(sequence[:, -1], tf.int64)
+    sequence = tf.slice(sequence, [0, 0], [-1, output_weights_size])
+    logits = tf.matmul(sequence, tf.transpose(output_weights)) + output_bias
+    losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
+    return losses
 
 def setup_model(vocab_mapping, epoch_steps):
     """ Setup the model after we have imported the data and know the vocabulary size """
@@ -167,7 +168,7 @@ def setup_model(vocab_mapping, epoch_steps):
     kernel_shape = [1, 5, 256, 2]
     h6 = glu(kernel_shape, h5, 7)
 
-    kernel_shape = [1, 5, 512, 2]
+    kernel_shape = [1, 5, 512, 1]
     last_hidden = glu(kernel_shape, h6, 8)
 
     # Output word embeddings. Note: these are not the same as the input word embeddings.
@@ -182,16 +183,19 @@ def setup_model(vocab_mapping, epoch_steps):
     # Concat the labels onto the context index and send off to be evaluated
     concated = tf.concat(2, [last_hidden, tf.expand_dims(input_y, 2)])
 
-    # Evaluate losses with a sampled softmax
-    losses = tf.map_fn(lambda sequence: compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
-    loss = tf.reduce_mean(losses)
-    l = tf.Print(loss, [loss], summarize=5000, message="loss")
+    # Evaluate losses with a sampled softmax for training and a full softmax for validation and test
+    if FLAGS.train and validating == False:
+        losses = tf.map_fn(lambda sequence: compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
+        loss = tf.reduce_mean(losses)
+    else:
+        losses = tf.map_fn(lambda sequence: compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
+        loss = tf.reduce_mean(losses)
 
-    # Find the perplexity
-    #full_losses = tf.map_fn(lambda sequence: compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
-    #full_loss = tf.reduce_mean(full_losses)
-    batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
-    perplexity = tf.reduce_mean(batch_perplexities)
+        # Calculate batch perplexities across the full softmax if we are validating or testing
+        batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
+        perplexity = tf.reduce_mean(batch_perplexities)
+
+    l = tf.Print(loss, [loss], summarize=5000, message="loss")
     p = tf.Print(perplexity, [perplexity], summarize=5000, message="perplexity")
 
     # If we are training a model, proceed to optimize gradients and backprop.
@@ -230,9 +234,9 @@ if __name__=="__main__":
         ckpt = tf.train.get_checkpoint_state('.')
         saver.restore(sess, ckpt.model_checkpoint_path)
 
-    for epoch in range(0, 50):
+    for epoch in range(0, 5):
+        validating = False
         print "epoch  %s" % epoch
-        candidates = 200
         indices = range(0, len(x))
         for minibatch in range(0, len(x)):
             print "%s/%s" % (minibatch, len(indices)/minibatch_size)
@@ -264,7 +268,7 @@ if __name__=="__main__":
         # Run the validation set on model to get validation perplexity for this epoch
         # Break after one run for now. TODO: proper softmax loss instead of messing with the candidate size
         if FLAGS.train:
-            candidates = len(vocab_mapping)
+            validating = True
             print "validation perplexity:"
             indices = range(0, len(v_x))
             for minibatch in range(0, len(v_x)):
