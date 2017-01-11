@@ -23,5 +23,6 @@ This implements a sigmoid gated convolutional network, as per https://arxiv.org/
 TODO:
 - Implement adaptive softmax
 
-[0] https://arxiv.org/pdf/1609.04309v2.pdf 
-[1] https://arxiv.org/pdf/1602.07868v3.pdf
+[0]: https://arxiv.org/pdf/1609.04309v2.pdf
+
+[1]: https://arxiv.org/pdf/1602.07868v3.pdf
