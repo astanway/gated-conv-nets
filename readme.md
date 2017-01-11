@@ -16,7 +16,7 @@ This implements a sigmoid gated convolutional network, as per https://arxiv.org/
   
   The authors use a newer technique called the adaptive softmax to approximate the softmax for speed. I have opted for Tensorflow's native implementation of sampled softmax for now until I have the time to read the adaptive softmax paper [0] and understand how it works. The sampled softmax works by simply approximating the total by sampling over a handful of classes in the vocabulary. This tends to work because most vocabularies tend have a Zipfian distribution of word frequencies.
   
-  In this implementation, I use a depthwise 2d convolution, treating each input embedding dimension as a different channel. As per the paper, I progressively increase the dimensionality and context size as the layers increase. This particular net is 8 layers deep, with 2 residual layers, and an output embedding projection of 1024 dimensions. The sequence length is set at 20. I use weight normalization [1], as per the paper. The batch size is set to 750, and there is a decaying learning rate that starts at .5 and is reduced by 80% every epoch.
+  In this implementation, I use a depthwise 2d convolution, treating each input embedding dimension as a different channel. As per the paper, I progressively increase the dimensionality and context size as the layers increase. This particular net is 8 layers deep, with 2 residual layers, and an output embedding projection of 1024 dimensions. The sequence length is set at 20. I use weight normalization [1], as per the paper. The batch size is set to 750.
  
  
 TODO:
