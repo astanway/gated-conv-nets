@@ -91,8 +91,10 @@ def glu(kernel_shape, layer_input, layer_name):
     paddings = [[0,0],[0,0],[left_pad,0],[0,0]]
     padded_input = tf.pad(layer_input, paddings, "CONSTANT")
 
-    # First convolutional layer, Kaiming intialization
-    W = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="W%s" % layer_name)
+    # First convolutional layer, Kaiming intialization, weight normalized
+    stddev = np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))
+    W_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="W%s" % layer_name)
+    W = tf.Variable(1.0 / stddev, dtype=tf.float32) * W_v / tf.nn.l2_normalize(W_v, 0)
     b = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
     conv1 = tf.nn.depthwise_conv2d(
         padded_input,
@@ -102,8 +104,9 @@ def glu(kernel_shape, layer_input, layer_name):
         name="conv1")
     conv1 = tf.nn.bias_add(conv1, b)
 
-    # Gating sigmoid layer, Kaiming intialization
-    V = tf.Variable(tf.random_normal(kernel_shape, stddev=np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))), name="V%s" % layer_name)
+    # Gating sigmoid layer, Kaiming intialization, weight normalized
+    V_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="V%s" % layer_name)
+    V = tf.Variable(1.0 / stddev, dtype=tf.float32) * V_v / tf.nn.l2_normalize(V_v, 0)
     c = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
     conv2 = tf.nn.depthwise_conv2d(
         padded_input,
@@ -202,7 +205,7 @@ def setup_model(vocab_mapping, epoch_steps):
     # Gradient clipping set to -.1, .1.
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.exponential_decay(0.6, global_step, epoch_steps, 0.8, staircase=True) # decay the learning every epoch
+        learning_rate = tf.train.exponential_decay(0.5, global_step, epoch_steps, 0.8, staircase=False) # decay the learning every epoch
         optimizer = tf.train.MomentumOptimizer(learning_rate, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
