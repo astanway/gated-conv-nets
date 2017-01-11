@@ -120,30 +120,13 @@ def glu(kernel_shape, layer_input, layer_name):
 
     return h
 
-def compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
-    """ Compute sampled softmax for training"""
-    global candidates
-    labels = tf.cast(sequence[:, -1], tf.int64)
-    labels = tf.expand_dims(labels, 1)
-    sequence = tf.slice(sequence, [0, 0], [-1, output_weights_size])
-    losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, sequence, labels, candidates, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
-    return losses
-
-def compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size):
-    """ Compute full softmax for testing and validation"""
-    labels = tf.cast(sequence[:, -1], tf.int64)
-    sequence = tf.slice(sequence, [0, 0], [-1, output_weights_size])
-    logits = tf.matmul(sequence, tf.transpose(output_weights)) + output_bias
-    losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
-    return losses
-
 def setup_model(vocab_mapping, epoch_steps):
     """ Setup the model after we have imported the data and know the vocabulary size """
     # Embedding layer
     vocab_size = len(vocab_mapping)
     all_word_embeddings = tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.01), name="all_word_embeddings")
     input_embeddings = tf.nn.embedding_lookup(all_word_embeddings, input_x)
-    input_embeddings_expanded = tf.expand_dims(input_embeddings, 1) # give it height of 1
+    input_embeddings_expanded = tf.expand_dims(input_embeddings, 1)
 
     # [height, width, in_channels, out_channels]
     kernel_shape = [1, 3, embedding_size, 1]
@@ -183,29 +166,33 @@ def setup_model(vocab_mapping, epoch_steps):
     last_hidden = tf.slice(last_hidden, [0, 0, 0, 0], [-1, -1, sequence_length-1, -1])
     last_hidden = tf.squeeze(last_hidden)
 
-    # Concat the labels onto the context index and send off to be evaluated
-    concated = tf.concat(2, [last_hidden, tf.expand_dims(input_y, 2)])
-
     # Evaluate losses with a sampled softmax for training and a full softmax for validation and test
     if FLAGS.train and validating == False:
-        losses = tf.map_fn(lambda sequence: compute_sampled_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
+        last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
+        labels = tf.expand_dims(tf.reshape(input_y, [-1]), 1)
+        losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
         loss = tf.reduce_mean(losses)
     else:
-        losses = tf.map_fn(lambda sequence: compute_full_softmax(output_weights, output_bias, sequence, output_weights_size, vocab_size), concated)
+        last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
+        labels = tf.reshape(input_y, [-1])
+        logits = tf.nn.softmax(tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias)
+        losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
         loss = tf.reduce_mean(losses)
 
-    # Calculate batch perplexities across the full softmax if we are validating or testing
-    batch_perplexities = tf.map_fn(lambda sequence_loss: tf.exp(tf.reduce_sum(sequence_loss) / sequence_length), losses)
-    perplexity = tf.reduce_mean(batch_perplexities)
+    # Calculate perplexities
+    perplexity = tf.exp(loss)
 
     l = tf.Print(loss, [loss], summarize=5000, message="loss")
-    p = tf.Print(perplexity, [perplexity], summarize=5000, message="perplexity")
+    p = tf.Print(perplexity, [perplexity], summarize=5000, message="log perplexity")
+    tf.summary.scalar('loss', loss)
+    tf.summary.tensor_summary('losses', losses)
+    tf.summary.tensor_summary('perplexity', perplexity)
 
     # If we are training a model, proceed to optimize gradients and backprop.
     # Gradient clipping set to -.1, .1.
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.exponential_decay(0.5, global_step, epoch_steps, 0.8, staircase=False) # decay the learning every epoch
+        learning_rate = tf.train.exponential_decay(1.0, global_step, epoch_steps, 0.99999, staircase=False) # decay the learning every epoch
         optimizer = tf.train.MomentumOptimizer(learning_rate, .99)
         gvs = optimizer.compute_gradients(loss)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
@@ -216,7 +203,7 @@ def setup_model(vocab_mapping, epoch_steps):
 
 if __name__=="__main__":
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
-    input_y = tf.placeholder(tf.float32, shape=(minibatch_size, sequence_length - 1), name="input_y")
+    input_y = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length - 1), name="input_y")
     x, y, v_x, v_y, vocab_mapping = get_data()
 
     print minibatch_size
@@ -225,19 +212,29 @@ if __name__=="__main__":
     epoch_steps = len(x) / minibatch_size
 
     if FLAGS.train:
+        logdir = './train_summaries'
         train_step, global_step, p, l = setup_model(vocab_mapping, epoch_steps)
         saver = tf.train.Saver()
-        sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.allocator_type = 'BFC'
+        sess = tf.InteractiveSession(config=config)
+        merged = tf.summary.merge_all()
+        writer = tf.summary.FileWriter(logdir, sess.graph)
         tf.global_variables_initializer().run()
 
     else:
+        logdir = './test_summaries'
         p, l = setup_model(vocab_mapping)
         saver = tf.train.Saver()
-        sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True))
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.allocator_type = 'BFC'
+        sess = tf.InteractiveSession(config=config)
         ckpt = tf.train.get_checkpoint_state('.')
+        merged = tf.summary.merge_all()
+        writer = tf.summary.FileWriter(logdir, sess.graph)
         saver.restore(sess, ckpt.model_checkpoint_path)
 
-    for epoch in range(0, 5):
+    for epoch in range(0, 10):
         validating = False
         print "epoch  %s" % epoch
         indices = range(0, len(x))
@@ -262,13 +259,13 @@ if __name__=="__main__":
                 break
 
             if FLAGS.train:
-                sess.run([train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                if minibatch % 25 == 0:
-                    saver.save(sess, 'model.ckpt', global_step=global_step)
+                summary, t_, g_, p_, l_ = sess.run([merged, train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
+                #writer.add_summary(summary)
 
-		    # CHeck validation accuracy every 100 steps
-                    validating = True
+		# Check validation perplexity every N steps
+                if minibatch % 101 == 0:
                     print "validation perplexity:"
+                    saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
                     vindices = range(0, len(v_x))
                     m_x = []
                     m_y = []
@@ -290,8 +287,8 @@ if __name__=="__main__":
         # Run the validation set on model to get validation perplexity for this epoch
         # Break after one run for now. TODO: proper softmax loss instead of messing with the candidate size
         if FLAGS.train:
-            validating = True
             print "full validation perplexity:"
+            validating = True
             indices = range(0, len(v_x))
             for minibatch in range(0, len(v_x)):
                 print "%s/%s" % (minibatch, len(indices)/minibatch_size)
