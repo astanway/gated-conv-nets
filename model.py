@@ -19,7 +19,7 @@ FLAGS = flags.FLAGS
 sequence_length = 20
 embedding_size = 128
 minibatch_size = 750
-candidates = 500
+candidates = 1000
 validating = False
 
 def get_data():
@@ -91,11 +91,14 @@ def glu(kernel_shape, layer_input, layer_name):
     paddings = [[0,0],[0,0],[left_pad,0],[0,0]]
     padded_input = tf.pad(layer_input, paddings, "CONSTANT")
 
-    # First convolutional layer, Kaiming intialization, weight normalized
-    stddev = np.sqrt(2.0 / (kernel_shape[0] * kernel_shape[1]))
-    W_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="W%s" % layer_name)
-    W = tf.Variable(1.0 / stddev, dtype=tf.float32) * W_v / tf.nn.l2_normalize(W_v, 0)
-    b = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
+    # Kaiming intialization  there are "num input feature maps * filter height * filter width"
+        # inputs to each hidden unit
+    stddev = np.sqrt(2.0 / (kernel_shape[2]))
+
+    # First conv layer
+    W_v = tf.Variable(tf.random_uniform(kernel_shape, stddev=stddev), name="W%s" % layer_name)
+    W = tf.Variable(stddev, dtype=tf.float32) * W_v / tf.nn.l2_normalize(W_v, 0)
+    b = tf.Variable(tf.zeroes([kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
     conv1 = tf.nn.depthwise_conv2d(
         padded_input,
         W,
@@ -104,88 +107,111 @@ def glu(kernel_shape, layer_input, layer_name):
         name="conv1")
     conv1 = tf.nn.bias_add(conv1, b)
 
-    # Gating sigmoid layer, Kaiming intialization, weight normalized
-    V_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="V%s" % layer_name)
-    V = tf.Variable(1.0 / stddev, dtype=tf.float32) * V_v / tf.nn.l2_normalize(V_v, 0)
-    c = tf.Variable(tf.zeros(shape=[kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
+    # Second gating sigmoid layer
+    V_v = tf.Variable(tf.random_uniform(kernel_shape, stddev=stddev), name="V%s" % layer_name)
+    V = tf.Variable(stddev, dtype=tf.float32) * V_v / tf.nn.l2_normalize(V_v, 0)
+    c = tf.Variable(tf.zeros([kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
     conv2 = tf.nn.depthwise_conv2d(
         padded_input,
         V,
         strides=[1, 1, 1, 1],
         padding="VALID",
         name="conv2")
-    conv2 = tf.sigmoid(tf.nn.bias_add(conv2, c))
 
-    h = tf.multiply(conv1, conv2)
+    h = tf.multiply(conv1, tf.sigmoid(tf.nn.bias_add(conv2, c), name="sig"))
 
     return h
 
 def setup_model(vocab_mapping, epoch_steps):
     """ Setup the model after we have imported the data and know the vocabulary size """
-    # Embedding layer
+
     vocab_size = len(vocab_mapping)
-    all_word_embeddings = tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.01), name="all_word_embeddings")
+    all_word_embeddings = tf.Variable(tf.random_normal([vocab_size, embedding_size], stddev=.001), name="all_word_embeddings")
     input_embeddings = tf.nn.embedding_lookup(all_word_embeddings, input_x)
     input_embeddings_expanded = tf.expand_dims(input_embeddings, 1)
 
     # [height, width, in_channels, out_channels]
     kernel_shape = [1, 3, embedding_size, 1]
-    h0 = glu(kernel_shape, input_embeddings_expanded, 1)
+    h0 = glu(kernel_shape, input_embeddings_expanded, 0)
+    h1 = glu(kernel_shape, h0, 1)
+    h2 = glu(kernel_shape, h1, 2)
+    h3 = glu(kernel_shape, h2, 3)
+    h4 = glu(kernel_shape, h3, 4)
+    h4 = tf.add(h4, h0) # first residual block
 
-    kernel_shape = [1, 3, 128, 1]
-    h1 = glu(kernel_shape, h0, 2)
+    kernel_shape = [1, 4, 128, 1]
+    h5 = glu(kernel_shape, h4, 5)
+    h6 = glu(kernel_shape, h5, 6)
+    h7 = glu(kernel_shape, h6, 7)
+    h8 = glu(kernel_shape, h7, 8)
+    h9 = glu(kernel_shape, h8, 9)
+    h9 = tf.add(h9, h5) # second residual block
 
-    kernel_shape = [1, 3, 128, 1]
-    h2 = glu(kernel_shape, h1, 3)
+    kernel_shape = [1, 5, 128, 1]
+    h10 = glu(kernel_shape, h9, 10)
+    h11 = glu(kernel_shape, h10, 11)
+    h12 = glu(kernel_shape, h11, 12)
+    h13 = glu(kernel_shape, h12, 13)
+    h14 = glu(kernel_shape, h13, 14)
+    h14 = tf.add(h14, h9)
 
-    h2 = tf.add(h2, h0) # skip two residual layer
-
-    kernel_shape = [1, 5, 128, 2]
-    h3 = glu(kernel_shape, h2, 4)
-
-    kernel_shape = [1, 5, 256, 1]
-    h4 = glu(kernel_shape, h3, 5)
-
-    kernel_shape = [1, 5, 256, 1]
-    h5 = glu(kernel_shape, h4, 6)
-
-    h5 = tf.add(h5, h3) # skip two residual layer
+    kernel_shape = [1, 5, 128, 2] # double output filters
+    h14a = glu(kernel_shape, h14, 14a)
 
     kernel_shape = [1, 5, 256, 2]
-    h6 = glu(kernel_shape, h5, 7)
+    h15 = glu(kernel_shape, h14a, 15)
+    h16 = glu(kernel_shape, h15, 16)
+    h17 = glu(kernel_shape, h16, 17)
+    h18 = glu(kernel_shape, h17, 18)
+    h19 = glu(kernel_shape, h18, 19)
+    h19 = tf.add(h19, h14a) # third residual block
+
+    kernel_shape = [1, 5, 256, 2] # double output filters
+    h19a = glu(kernel_shape, h19, 19a)
 
     kernel_shape = [1, 5, 512, 1]
-    last_hidden = glu(kernel_shape, h6, 8)
-
-    # Output word embeddings. Note: these are not the same as the input word embeddings.
-    output_weights_size = kernel_shape[2] * kernel_shape[3]
-    output_weights = tf.Variable(tf.random_normal([vocab_size, output_weights_size], stddev=.001), name="output_weights")
-    output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
+    h20 = glu(kernel_shape, h19a, 20)
+    h21 = glu(kernel_shape, h21, 21)
+    h22 = glu(kernel_shape, h22, 22)
+    h23 = glu(kernel_shape, h23, 23)
+    h24 = glu(kernel_shape, h24, 24)
+    h24 = tf.add(h24, h19a) # fourth residual block
 
     # Remove the last element, as the next word is in a new sequence and we do not predict it
+    last_hidden = h24
     last_hidden = tf.slice(last_hidden, [0, 0, 0, 0], [-1, -1, sequence_length-1, -1])
     last_hidden = tf.squeeze(last_hidden)
 
+    # Output embeddings
+    output_weights_size = kernel_shape[2] * kernel_shape[3]
+    output_weights = tf.Variable(tf.random_uniform([vocab_size, output_weights_size], stddev=np.sqrt(2.0 / kernel_shape[2]), name="output_weights")
+    output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
+
     # Evaluate losses with a sampled softmax for training and a full softmax for validation and test
-    if FLAGS.train and validating == False:
+    if False and LAGS.train and validating == False:
         last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
         labels = tf.expand_dims(tf.reshape(input_y, [-1]), 1)
-        losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, remove_accidental_hits=True, partition_strategy='mod', name='sampled_softmax_loss')
+        losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
         loss = tf.reduce_mean(losses)
     else:
         last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
         labels = tf.reshape(input_y, [-1])
-        logits = tf.nn.softmax(tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias)
+        multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) # + output_bias
+        logits = tf.nn.softmax(multiplied) # add to 1, for each word
         losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, labels)
         loss = tf.reduce_mean(losses)
+        tf.summary.histogram('logits', tf.gather(logits, 0))
+        tf.summary.histogram('multiplied', tf.gather(multiplied, 0))
 
     # Calculate perplexities
     perplexity = tf.exp(loss)
 
-    l = tf.Print(loss, [loss], summarize=5000, message="loss")
-    p = tf.Print(perplexity, [perplexity], summarize=5000, message="log perplexity")
+    l = tf.Print(loss, [loss], summarize=200, message="layer multiplied by weights")
+    p = tf.Print(h4, [h4], summarize=20, message="last hidden layer")
     tf.summary.scalar('loss', loss)
-    tf.summary.tensor_summary('losses', losses)
+    tf.summary.histogram('output_bias', output_bias)
+    tf.summary.histogram('output_weights', tf.gather(output_weights, 0))
+    tf.summary.histogram('losses', losses)
     tf.summary.tensor_summary('perplexity', perplexity)
 
     # If we are training a model, proceed to optimize gradients and backprop.
@@ -193,8 +219,8 @@ def setup_model(vocab_mapping, epoch_steps):
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
         learning_rate = tf.train.exponential_decay(1.0, global_step, epoch_steps, 0.99999, staircase=False) # decay the learning every epoch
-        optimizer = tf.train.MomentumOptimizer(learning_rate, .99)
-        gvs = optimizer.compute_gradients(loss)
+        optimizer = tf.train.MomentumOptimizer(0.8, .99)
+        gvs = optimizer.compute_gradients(losses)
         capped_gvs = [(tf.clip_by_value(grad, -.1, .1), var) for grad, var in gvs if grad is not None]
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
         return train_step, global_step, p, l
@@ -214,11 +240,11 @@ if __name__=="__main__":
     if FLAGS.train:
         logdir = './train_summaries'
         train_step, global_step, p, l = setup_model(vocab_mapping, epoch_steps)
+        merged = tf.summary.merge_all()
         saver = tf.train.Saver()
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allocator_type = 'BFC'
         sess = tf.InteractiveSession(config=config)
-        merged = tf.summary.merge_all()
         writer = tf.summary.FileWriter(logdir, sess.graph)
         tf.global_variables_initializer().run()
 
@@ -230,11 +256,11 @@ if __name__=="__main__":
         config.gpu_options.allocator_type = 'BFC'
         sess = tf.InteractiveSession(config=config)
         ckpt = tf.train.get_checkpoint_state('.')
-        merged = tf.summary.merge_all()
         writer = tf.summary.FileWriter(logdir, sess.graph)
         saver.restore(sess, ckpt.model_checkpoint_path)
 
-    for epoch in range(0, 10):
+    for epoch in range(0, 300):
+        saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
         validating = False
         print "epoch  %s" % epoch
         indices = range(0, len(x))
@@ -260,55 +286,55 @@ if __name__=="__main__":
 
             if FLAGS.train:
                 summary, t_, g_, p_, l_ = sess.run([merged, train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                #writer.add_summary(summary)
+                writer.add_summary(summary)
 
-		# Check validation perplexity every N steps
-                if minibatch % 101 == 0:
-                    print "validation perplexity:"
-                    saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
-                    vindices = range(0, len(v_x))
-                    m_x = []
-                    m_y = []
+                # Check validation perplexity every N steps
+              #  if minibatch % 101 == 0:
+              #      print "validation perplexity:"
+              #      saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
+              #      vindices = range(0, len(v_x))
+              #      m_x = []
+              #      m_y = []
 
-                    for x_i in range(0, minibatch_size):
-                        vindex = random.randrange(len(vindices))
-                        m_x.append(v_x[vindex])
-                        m_y.append(v_y[vindex])
-                        del vindices[vindex]
+              #      for x_i in range(0, minibatch_size):
+              #          vindex = random.randrange(len(vindices))
+              #          m_x.append(v_x[vindex])
+              #          m_y.append(v_y[vindex])
+              #          del vindices[vindex]
+              #
+              #      m_x = np.array(m_x)
+              #      m_y = np.array(m_y)
 
-                    m_x = np.array(m_x)
-                    m_y = np.array(m_y)
-
-                    sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
-                    validating = False
+              #      sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+              #      validating = False
             else:
                 sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
 
         # Run the validation set on model to get validation perplexity for this epoch
         # Break after one run for now. TODO: proper softmax loss instead of messing with the candidate size
-        if FLAGS.train:
-            print "full validation perplexity:"
-            validating = True
-            indices = range(0, len(v_x))
-            for minibatch in range(0, len(v_x)):
-                print "%s/%s" % (minibatch, len(indices)/minibatch_size)
-                m_x = []
-                m_y = []
-                for x_i in range(0, minibatch_size):
-                    if len(indices) == 0:
-                        break
+       # if FLAGS.train:
+       #     print "full validation perplexity:"
+       #     validating = True
+       #     indices = range(0, len(v_x))
+       #     for minibatch in range(0, len(v_x)):
+       #         print "%s/%s" % (minibatch, len(indices)/minibatch_size)
+       #         m_x = []
+       #         m_y = []
+       #         for x_i in range(0, minibatch_size):
+       #             if len(indices) == 0:
+       #                 break
+       #
+       #             index = random.randrange(len(indices))
 
-                    index = random.randrange(len(indices))
+       #             m_x.append(v_x[index])
+       #             m_y.append(v_y[index])
+       #             del indices[index]
+       #
+       #         m_x = np.array(m_x)
+       #         m_y = np.array(m_y)
 
-                    m_x.append(v_x[index])
-                    m_y.append(v_y[index])
-                    del indices[index]
+       #         if len(m_x) < minibatch_size:
+       #             break
 
-                m_x = np.array(m_x)
-                m_y = np.array(m_y)
-
-                if len(m_x) < minibatch_size:
-                    break
-
-                sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
-            validating = False
+       #         sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+       #     validating = False
