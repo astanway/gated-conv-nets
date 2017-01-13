@@ -243,8 +243,6 @@ if __name__=="__main__":
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
     input_y = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length - 1), name="input_y")
     x, y, v_x, v_y, vocab_mapping = get_data()
-    x = x[:10]
-    y = y[:10]
 
     print minibatch_size
     print len(x) / minibatch_size
