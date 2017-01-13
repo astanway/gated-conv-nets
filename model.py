@@ -13,15 +13,16 @@ def _LogUniformCandidateSamplerGrad(op,grad,foo,bar):
   return [tf.cast(tf.zeros_like(foo), tf.int64)]
 
 flags = tf.flags
-flags.DEFINE_bool("train", True, "Train the model or run it on the test set only")
+flags.DEFINE_bool("train", False, "Train the model or run it on the test set only")
+flags.DEFINE_bool("valid", False, "Validate")
+flags.DEFINE_bool("test", False, "Test")
 FLAGS = flags.FLAGS
 
 # Config
 sequence_length = 20
 embedding_size = 128
 minibatch_size = 750
-candidates = 110
-validating = False
+candidates = 2000
 
 def get_data():
     def chunks(l, n):
@@ -32,9 +33,6 @@ def get_data():
     lines = []
     y = []
     x = []
-    vlines = []
-    v_x = []
-    v_y = []
 
     # Open train, test, and validation data so that they can share a unified vocabulary and model
     with open('wiki.train.tokens') as f:
@@ -42,7 +40,7 @@ def get_data():
             line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
-                if FLAGS.train: # Add the data to lines we are training
+                if FLAGS.train:
                     lines.append(l)
                 for w in l:
                     vocabulary.add(w)
@@ -52,8 +50,8 @@ def get_data():
             line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
-                if FLAGS.train: # Add data to lines if this is a test run
-                    vlines.append(l)
+                if FLAGS.valid:
+                    lines.append(l)
                 for w in l:
                     vocabulary.add(w)
 
@@ -62,7 +60,7 @@ def get_data():
             line = "<S> " + line + " </S>"
             l = line.lower().strip().split()
             if len(l) >= sequence_length:
-                if not FLAGS.train: # Add data to lines if this is a test run
+                if FLAGS.test:
                     lines.append(l)
                 for w in l:
                     vocabulary.add(w)
@@ -77,14 +75,7 @@ def get_data():
             del chunk[0]
             y.append([vocab_mapping[word] for word in chunk])
 
-    vlist = [chunks(v, sequence_length) for v in vlines]
-    for c in vlist:
-        for chunk in c:
-            v_x.append([vocab_mapping[word] for word in chunk])
-            del chunk[0]
-            v_y.append([vocab_mapping[word] for word in chunk])
-
-    return x, y, v_x, v_y, vocab_mapping
+    return x, y, vocab_mapping
 
 def glu(kernel_shape, layer_input, layer_name, residual=None):
     """ Gated Linear Unit """
@@ -237,7 +228,7 @@ if __name__=="__main__":
         os.remove(f)
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
     input_y = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length - 1), name="input_y")
-    x, y, v_x, v_y, vocab_mapping = get_data()
+    x, y, vocab_mapping = get_data()
 
     print minibatch_size
     print len(x) / minibatch_size
@@ -254,10 +245,9 @@ if __name__=="__main__":
         sess = tf.InteractiveSession(config=config)
         writer = tf.summary.FileWriter(logdir, sess.graph)
         tf.global_variables_initializer().run()
-
     else:
         logdir = './test_summaries'
-        p, l = setup_model(vocab_mapping)
+        p, l = setup_model(vocab_mapping, epoch_steps)
         saver = tf.train.Saver()
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allocator_type = 'BFC'
@@ -267,7 +257,6 @@ if __name__=="__main__":
         saver.restore(sess, ckpt.model_checkpoint_path)
 
     for epoch in range(0, 10000):
-        validating = False
         print "epoch  %s" % epoch
         indices = range(0, len(x))
         for minibatch in range(0, len(x)):
