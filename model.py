@@ -145,7 +145,7 @@ def setup_model(vocab_mapping, epoch_steps):
     h7 = glu(kernel_shape, h6, 7)
     h8 = glu(kernel_shape, h7, 8)
     h9 = glu(kernel_shape, h8, 9)
-    h9 = tf.add(h9, h5) # second residual block
+    h9 = tf.add(h9, h4) # second residual block
 
     kernel_shape = [1, 4, 128, 1]
     h10 = glu(kernel_shape, h9, 10)
