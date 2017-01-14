@@ -214,7 +214,7 @@ def setup_model(vocab_mapping, epoch_steps):
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
         learning_rate = tf.train.exponential_decay(1.0, global_step, epoch_steps, 0.99999, staircase=False)
-        optimizer = tf.train.MomentumOptimizer(.2, .99)
+        optimizer = tf.train.MomentumOptimizer(.01, .5)
         gvs = optimizer.compute_gradients(losses)
         capped_gvs = [(tf.clip_by_norm(grad, .1), var) for grad, var in gvs if grad is not None]
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
