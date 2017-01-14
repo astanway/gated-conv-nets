@@ -1,4 +1,4 @@
-This implements a sigmoid gated convolutional network, as per https://arxiv.org/pdf/1612.08083v1.pdf.
+This is an experimental implementation of a sigmoid gated convolutional network, as per https://arxiv.org/pdf/1612.08083v1.pdf.
 
 ![x](https://raw.githubusercontent.com/astanway/gated-conv-nets/master/gcnn.gif)
 
