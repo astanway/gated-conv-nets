@@ -18,10 +18,10 @@ flags.DEFINE_bool("valid", False, "Validate")
 flags.DEFINE_bool("test", False, "Test")
 FLAGS = flags.FLAGS
 
-sequence_length = 20
+sequence_length = 25
 embedding_size = 128
 minibatch_size = 750
-candidates = 2000
+candidates = 10000
 
 def get_data():
     def chunks(l, n):
@@ -86,7 +86,7 @@ def glu(kernel_shape, layer_input, layer_name, residual=None):
 
     # Kaiming intialization
     stddev = np.sqrt(2.0 / (kernel_shape[1] * kernel_shape[2]))
-    #stddev = .5
+
     # First conv layer
     W_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="W%s" % layer_name)
     W = tf.Variable(stddev, dtype=tf.float32) * W_v / tf.nn.l2_normalize(W_v, 0)
@@ -136,102 +136,53 @@ def setup_model(vocab_mapping, epoch_steps):
     h3 = glu(kernel_shape, h2, 3)
     h4 = glu(kernel_shape, h3, 4, h0)
 
-    kernel_shape = [1, 3, 128, 1]
-    h5 = glu(kernel_shape, h4, 5)
+   #  For larger models with output projections:
+    kernel_shape = [1, 3, 128, 2]
+    h4a = glu(kernel_shape, h4, '14a')
+
+    kernel_shape = [1, 3, 256, 1]
+    h5 = glu(kernel_shape, h4a, 5)
     h6 = glu(kernel_shape, h5, 6)
     h7 = glu(kernel_shape, h6, 7)
     h8 = glu(kernel_shape, h7, 8)
-    h9 = glu(kernel_shape, h8, 9, h4)
-
-    kernel_shape = [1, 3, 128, 1]
-    h10 = glu(kernel_shape, h9, 10)
-    h11 = glu(kernel_shape, h10, 11)
-    h12 = glu(kernel_shape, h11, 12)
-    h13 = glu(kernel_shape, h12, 13)
-    h14 = glu(kernel_shape, h13, 14, h9)
-
-    kernel_shape = [1, 3, 128, 2] # double output filters
-    h14a = glu(kernel_shape, h14, '14a')
-
-    kernel_shape = [1, 3, 256, 1]
-    h15 = glu(kernel_shape, h14a, 15)
-    h16 = glu(kernel_shape, h15, 16)
-    h17 = glu(kernel_shape, h16, 17)
-    h18 = glu(kernel_shape, h17, 18)
-    h19 = glu(kernel_shape, h18, 19, h14a)
-
-    kernel_shape = [1, 3, 256, 2] # double output filters
-    h19a = glu(kernel_shape, h19, '19a')
-
-   # kernel_shape = [1, 5, 512, 1]
-   # h20 = glu(kernel_shape, h19a, 20)
-   # h21 = glu(kernel_shape, h20, 21)
-   # h22 = glu(kernel_shape, h21, 22)
-   # h23 = glu(kernel_shape, h22, 23)
-   # h24 = glu(kernel_shape, h23, 24, h19a)
-
-   # kernel_shape = [1, 6, 512, 1]
-   # h25 = glu(kernel_shape, h24, 25)
-   # h26 = glu(kernel_shape, h25, 26)
-   # h27 = glu(kernel_shape, h26, 27)
-   # h28 = glu(kernel_shape, h27, 28)
-   # h29 = glu(kernel_shape, h28, 29, h24)
-
-    # Remove the last element, as the next word is in a new sequence and we do not predict it
-    last_hidden = h19a
-    last_hidden = tf.slice(last_hidden, [0, 0, 0, 0], [-1, -1, sequence_length-1, -1])
-    last_hidden = tf.squeeze(last_hidden)
+    h9 = glu(kernel_shape, h8, 9, h4a)
 
     # Output embeddings
     output_weights_size = kernel_shape[2] * kernel_shape[3]
     stddev = np.sqrt(2.0 / (kernel_shape[1] * kernel_shape[2]))
-    #stddev = .125
     output_weights = tf.Variable(tf.random_normal([vocab_size, output_weights_size], stddev=stddev), name="output_weights")
     output_bias = tf.Variable(tf.zeros([vocab_size]), name="output_bias")
 
-    # Evaluate losses with a sampled softmax for training and a full softmax for validation and test
+    # Remove the last element, as the next word is in a new sequence and we do not predict it
+    # Reshape labels and hidden layer as we're only interested in scoring at the word level
+    last_hidden = h9
+    last_hidden = tf.slice(last_hidden, [0, 0, 0, 0], [-1, -1, sequence_length-1, -1])
+    last_hidden = tf.squeeze(last_hidden)
     last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
     labels = tf.expand_dims(tf.reshape(input_y, [-1]), 1)
-    if FLAGS.train:
-       # losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
 
-        multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
-        logits = tf.nn.softmax(multiplied) # adds to 1, for each word
-        rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
-        indices = tf.concat(1, [rows, labels])
-        probs = tf.gather_nd(logits, indices)
-        losses = -tf.log(probs)
+   # Todo: sampled softmax for larger vocabularies
+   # losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
 
-        loss = tf.reduce_mean(-tf.log(probs))
-        perplexity = tf.exp(loss)
-        loss = tf.reduce_mean(losses)
-        perplexity = tf.exp(loss)
-        l = tf.Print(loss, [loss], summarize=21, message="")
-        p = tf.Print(perplexity, [perplexity], summarize=21, message="")
-        tf.summary.scalar('perplexity', perplexity)
-        tf.summary.scalar('loss', loss)
-        tf.summary.histogram('losses', losses)
-    else:
-        multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
-        logits = tf.nn.softmax(multiplied) # adds to 1, for each word
-        rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
-        indices = tf.concat(1, [rows, labels])
-        probs = tf.gather_nd(logits, indices)
-        losses = -tf.log(probs)
-        loss = tf.reduce_mean(-tf.log(probs))
-        perplexity = tf.exp(loss)
-        l = tf.Print(loss, [loss], summarize=21, message="")
-        p = tf.Print(perplexity, [perplexity], summarize=21, message="shape")
-        tf.summary.scalar('perplexity', perplexity)
-        tf.summary.scalar('loss', loss)
-        tf.summary.histogram('probs', probs)
+    multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
+    logits = tf.nn.softmax(multiplied) # adds to 1, for each word
+    rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
+    indices = tf.concat(1, [rows, labels])
+    probs = tf.gather_nd(logits, indices)
+    losses = -tf.log(probs)
+    loss = tf.reduce_mean(losses)
+    perplexity = tf.exp(loss)
+    l = tf.Print(loss, [loss], summarize=21, message="")
+    p = tf.Print(perplexity, [perplexity], summarize=21, message="")
+    tf.summary.scalar('perplexity', perplexity)
+    tf.summary.scalar('loss', loss)
+    tf.summary.histogram('losses', losses)
 
-    # Optimize gradients and backprop.
-    # Gradient clipping set to .1.
+    # Clip and optimize
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
-        learning_rate = tf.train.exponential_decay(1.0, global_step, epoch_steps, 0.99999, staircase=False)
-        optimizer = tf.train.MomentumOptimizer(.01, .8)
+        learning_rate = tf.train.exponential_decay(.5, global_step, 1, 0.9, staircase=False)
+        optimizer = tf.train.MomentumOptimizer(.08, .8)
         gvs = optimizer.compute_gradients(losses)
         capped_gvs = [(tf.clip_by_norm(grad, .1), var) for grad, var in gvs if grad is not None]
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
@@ -304,9 +255,9 @@ if __name__=="__main__":
             if FLAGS.train:
                 saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
                 summary, t_, g_, p_, l_ = sess.run([merged, train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                writer.add_summary(summary)
+                writer.add_summary(summary, minibatch)
                 writer.flush()
             else:
                 summary, p_, l_ = sess.run([merged, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                writer.add_summary(summary)
+                writer.add_summary(summary, minibatch)
                 writer.flush()
