@@ -18,7 +18,6 @@ flags.DEFINE_bool("valid", False, "Validate")
 flags.DEFINE_bool("test", False, "Test")
 FLAGS = flags.FLAGS
 
-# Config
 sequence_length = 20
 embedding_size = 128
 minibatch_size = 750
@@ -130,14 +129,14 @@ def setup_model(vocab_mapping, epoch_steps):
     input_embeddings_expanded = tf.expand_dims(input_embeddings, 1)
 
     # [height, width, in_channels, out_channels]
-    kernel_shape = [1, 1, embedding_size, 1]
+    kernel_shape = [1, 3, embedding_size, 1]
     h0 = glu(kernel_shape, input_embeddings_expanded, 0)
     h1 = glu(kernel_shape, h0, 1)
     h2 = glu(kernel_shape, h1, 2)
     h3 = glu(kernel_shape, h2, 3)
     h4 = glu(kernel_shape, h3, 4, h0)
 
-    kernel_shape = [1, 2, 128, 1]
+    kernel_shape = [1, 3, 128, 1]
     h5 = glu(kernel_shape, h4, 5)
     h6 = glu(kernel_shape, h5, 6)
     h7 = glu(kernel_shape, h6, 7)
@@ -151,17 +150,17 @@ def setup_model(vocab_mapping, epoch_steps):
     h13 = glu(kernel_shape, h12, 13)
     h14 = glu(kernel_shape, h13, 14, h9)
 
-    kernel_shape = [1, 4, 128, 2] # double output filters
+    kernel_shape = [1, 3, 128, 2] # double output filters
     h14a = glu(kernel_shape, h14, '14a')
 
-    kernel_shape = [1, 4, 256, 1]
+    kernel_shape = [1, 3, 256, 1]
     h15 = glu(kernel_shape, h14a, 15)
     h16 = glu(kernel_shape, h15, 16)
     h17 = glu(kernel_shape, h16, 17)
     h18 = glu(kernel_shape, h17, 18)
     h19 = glu(kernel_shape, h18, 19, h14a)
 
-    kernel_shape = [1, 5, 256, 2] # double output filters
+    kernel_shape = [1, 3, 256, 2] # double output filters
     h19a = glu(kernel_shape, h19, '19a')
 
    # kernel_shape = [1, 5, 512, 1]
@@ -194,27 +193,45 @@ def setup_model(vocab_mapping, epoch_steps):
     last_hidden = tf.reshape(last_hidden, [minibatch_size * (sequence_length - 1), output_weights_size])
     labels = tf.expand_dims(tf.reshape(input_y, [-1]), 1)
     if FLAGS.train:
-        losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
+       # losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
+
+        multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
+        logits = tf.nn.softmax(multiplied) # adds to 1, for each word
+        rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
+        indices = tf.concat(1, [rows, labels])
+        probs = tf.gather_nd(logits, indices)
+        losses = -tf.log(probs)
+
+        loss = tf.reduce_mean(-tf.log(probs))
+        perplexity = tf.exp(loss)
         loss = tf.reduce_mean(losses)
         perplexity = tf.exp(loss)
         l = tf.Print(loss, [loss], summarize=21, message="")
         p = tf.Print(perplexity, [perplexity], summarize=21, message="")
+        tf.summary.scalar('perplexity', perplexity)
         tf.summary.scalar('loss', loss)
         tf.summary.histogram('losses', losses)
     else:
         multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
-        logits = tf.nn.softmax(multiplied) # add to 1, for each word
-        prediction = tf.argmax(logits,1)
-        l = tf.Print(input_y, [input_y], summarize=21, message="")
-        p = tf.Print(prediction, [prediction], summarize=21, message="")
-        tf.summary.histogram('prediction', prediction)
+        logits = tf.nn.softmax(multiplied) # adds to 1, for each word
+        rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
+        indices = tf.concat(1, [rows, labels])
+        probs = tf.gather_nd(logits, indices)
+        losses = -tf.log(probs)
+        loss = tf.reduce_mean(-tf.log(probs))
+        perplexity = tf.exp(loss)
+        l = tf.Print(loss, [loss], summarize=21, message="")
+        p = tf.Print(perplexity, [perplexity], summarize=21, message="shape")
+        tf.summary.scalar('perplexity', perplexity)
+        tf.summary.scalar('loss', loss)
+        tf.summary.histogram('probs', probs)
 
     # Optimize gradients and backprop.
     # Gradient clipping set to .1.
     if FLAGS.train:
         global_step = tf.Variable(0, name='global_step', trainable=False)
         learning_rate = tf.train.exponential_decay(1.0, global_step, epoch_steps, 0.99999, staircase=False)
-        optimizer = tf.train.MomentumOptimizer(.01, .5)
+        optimizer = tf.train.MomentumOptimizer(.01, .8)
         gvs = optimizer.compute_gradients(losses)
         capped_gvs = [(tf.clip_by_norm(grad, .1), var) for grad, var in gvs if grad is not None]
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
@@ -223,9 +240,6 @@ def setup_model(vocab_mapping, epoch_steps):
         return p, l
 
 if __name__=="__main__":
-    files = glob.glob('/home/ubuntu/gated-conv-nets/train_summaries/*')
-    for f in files:
-        os.remove(f)
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
     input_y = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length - 1), name="input_y")
     x, y, vocab_mapping = get_data()
@@ -236,25 +250,33 @@ if __name__=="__main__":
     epoch_steps = len(x) / minibatch_size
 
     if FLAGS.train:
-        logdir = './train_summaries'
+        logdir = 'train_summaries'
         train_step, global_step, p, l = setup_model(vocab_mapping, epoch_steps)
-        merged = tf.summary.merge_all()
         saver = tf.train.Saver()
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allocator_type = 'BFC'
         sess = tf.InteractiveSession(config=config)
-        writer = tf.summary.FileWriter(logdir, sess.graph)
         tf.global_variables_initializer().run()
     else:
-        logdir = './test_summaries'
+        if FLAGS.valid:
+            logdir = 'valid_summaries'
+        elif FLAGS.test:
+            logdir = 'test_summaries'
+
         p, l = setup_model(vocab_mapping, epoch_steps)
         saver = tf.train.Saver()
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allocator_type = 'BFC'
         sess = tf.InteractiveSession(config=config)
-        ckpt = tf.train.get_checkpoint_state('.')
-        writer = tf.summary.FileWriter(logdir, sess.graph)
+        ckpt = tf.train.get_checkpoint_state('./train_summaries')
         saver.restore(sess, ckpt.model_checkpoint_path)
+
+    files = glob.glob('/home/ubuntu/gated-conv-nets/' + logdir + '/*')
+    for f in files:
+        os.remove(f)
+
+    writer = tf.summary.FileWriter(logdir, sess.graph)
+    merged = tf.summary.merge_all()
 
     for epoch in range(0, 10000):
         print "epoch  %s" % epoch
@@ -285,4 +307,6 @@ if __name__=="__main__":
                 writer.add_summary(summary)
                 writer.flush()
             else:
-                sess.run([p, l], feed_dict={input_x: m_x, input_y: m_y})
+                summary, p_, l_ = sess.run([merged, p, l], feed_dict={input_x: m_x, input_y: m_y})
+                writer.add_summary(summary)
+                writer.flush()
