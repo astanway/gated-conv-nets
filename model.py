@@ -20,7 +20,7 @@ FLAGS = flags.FLAGS
 
 sequence_length = 25
 embedding_size = 128
-minibatch_size = 750
+minibatch_size = 500
 candidates = 10000
 
 def get_data():
@@ -172,8 +172,8 @@ def setup_model(vocab_mapping, epoch_steps):
     losses = -tf.log(probs)
     loss = tf.reduce_mean(losses)
     perplexity = tf.exp(loss)
-    l = tf.Print(loss, [loss], summarize=21, message="")
-    p = tf.Print(perplexity, [perplexity], summarize=21, message="")
+    l = tf.Print(loss, [loss], summarize=21, message="loss ")
+    p = tf.Print(perplexity, [perplexity], summarize=21, message="perplexity ")
     tf.summary.scalar('perplexity', perplexity)
     tf.summary.scalar('loss', loss)
     tf.summary.histogram('losses', losses)
@@ -255,9 +255,9 @@ if __name__=="__main__":
             if FLAGS.train:
                 saver.save(sess, logdir + '/model.ckpt', global_step=global_step)
                 summary, t_, g_, p_, l_ = sess.run([merged, train_step, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                writer.add_summary(summary, minibatch)
+                writer.add_summary(summary, g_)
                 writer.flush()
             else:
                 summary, p_, l_ = sess.run([merged, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                writer.add_summary(summary, minibatch)
+                writer.add_summary(summary)
                 writer.flush()
