@@ -35,9 +35,10 @@ The validation process continually loads the latest training weights as both pro
   
   Moving forward, there are some likely some interesting experiments to be done around various kernel width/layer depth permutations for identical effective context sizes.
  
- 
-TODO:
-- Implement adaptive softmax
+## Performance: 
+In 600k steps, this is able to achieve a test perplexity of 425 Wikitext-2. Below is the validation loss over time:
+![x](https://raw.githubusercontent.com/astanway/gated-conv-nets/master/validation_loss.png)
+
 
 [0] https://arxiv.org/pdf/1609.04309v2.pdf
 
