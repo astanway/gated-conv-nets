@@ -1,9 +1,20 @@
-This is an experimental implementation of a sigmoid gated convolutional network, as per https://arxiv.org/pdf/1612.08083v1.pdf.
+This is an implementation of a sigmoid gated convolutional network, as per https://arxiv.org/pdf/1612.08083v1.pdf.
 
 ![x](https://raw.githubusercontent.com/astanway/gated-conv-nets/master/gcnn.gif)
 
-## To run
-`python model.py --train True`
+## To run:
+Run the training process on the GPU:
+```
+unset CUDA_VISIBLE_DEVICES
+python model.py --train True
+```
+
+Simultaneously run the validation process on the CPU:
+```
+export CUDA_VISIBLE_DEVICES=""
+python model.py --valid True
+```
+The validation process continually loads the latest training weights as both processes run.
 
 ## Discussion:
   The technique described in this paper is an attempt to set up a convolutional network to achieve the same sorts of contextual inputs that an LSTM or RNN is traditionally good at, while taking advantage of the CNNs non-temporal nature to effect big speed gains. 
