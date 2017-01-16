@@ -164,11 +164,11 @@ def setup_model(vocab_mapping, epoch_steps):
    # Todo: sampled softmax for larger vocabularies
    # losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
 
-    multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
-    logits = tf.nn.softmax(multiplied) # adds to 1, for each word
+    logits = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
+    full_probs = tf.nn.softmax(logits) # adds to 1, for each word
     rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
     indices = tf.concat(1, [rows, labels])
-    probs = tf.gather_nd(logits, indices)
+    probs = tf.gather_nd(full_probs, indices)
     losses = -tf.log(probs)
     loss = tf.reduce_mean(losses)
     perplexity = tf.exp(loss)
