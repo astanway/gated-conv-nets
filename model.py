@@ -179,8 +179,8 @@ def setup_model(vocab_mapping, epoch_steps):
     tf.summary.histogram('losses', losses)
 
     # Clip and optimize
+    global_step = tf.Variable(0, name='global_step', trainable=False)
     if FLAGS.train:
-        global_step = tf.Variable(0, name='global_step', trainable=False)
         learning_rate = tf.train.exponential_decay(.5, global_step, 1, 0.9, staircase=False)
         optimizer = tf.train.MomentumOptimizer(.08, .8)
         gvs = optimizer.compute_gradients(losses)
@@ -188,7 +188,7 @@ def setup_model(vocab_mapping, epoch_steps):
         train_step = optimizer.apply_gradients(capped_gvs, global_step)
         return train_step, global_step, p, l
     else:
-        return p, l
+        return global_step, p, l
 
 if __name__=="__main__":
     input_x = tf.placeholder(tf.int32, shape=(minibatch_size, sequence_length), name="input_x")
@@ -214,7 +214,7 @@ if __name__=="__main__":
         elif FLAGS.test:
             logdir = 'test_summaries'
 
-        p, l = setup_model(vocab_mapping, epoch_steps)
+        global_step, p, l = setup_model(vocab_mapping, epoch_steps)
         saver = tf.train.Saver()
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allocator_type = 'BFC'
@@ -258,6 +258,8 @@ if __name__=="__main__":
                 writer.add_summary(summary, g_)
                 writer.flush()
             else:
-                summary, p_, l_ = sess.run([merged, p, l], feed_dict={input_x: m_x, input_y: m_y})
-                writer.add_summary(summary)
+                ckpt = tf.train.get_checkpoint_state('./train_summaries')
+                saver.restore(sess, ckpt.model_checkpoint_path)
+                summary, g_, p_, l_ = sess.run([merged, global_step, p, l], feed_dict={input_x: m_x, input_y: m_y})
+                writer.add_summary(summary, g_)
                 writer.flush()
