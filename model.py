@@ -88,8 +88,9 @@ def glu(kernel_shape, layer_input, layer_name, residual=None):
     stddev = np.sqrt(2.0 / (kernel_shape[1] * kernel_shape[2]))
 
     # First conv layer
+    W_g = tf.Variable(stddev, dtype=tf.float32)
     W_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="W%s" % layer_name)
-    W = tf.Variable(stddev, dtype=tf.float32) * W_v / tf.nn.l2_normalize(W_v, 0)
+    W =  (W_g / tf.nn.l2_normalize(W_v, 0)) * W_v
     b = tf.Variable(tf.zeros([kernel_shape[2] * kernel_shape[3]]), name="b%s" % layer_name)
     conv1 = tf.nn.depthwise_conv2d(
         padded_input,
@@ -100,8 +101,9 @@ def glu(kernel_shape, layer_input, layer_name, residual=None):
     conv1 = tf.nn.bias_add(conv1, b)
 
     # Second gating sigmoid layer
+    V_g = tf.Variable(stddev, dtype=tf.float32)
     V_v = tf.Variable(tf.random_normal(kernel_shape, stddev=stddev), name="V%s" % layer_name)
-    V = tf.Variable(stddev, dtype=tf.float32) * V_v / tf.nn.l2_normalize(V_v, 0)
+    V = (V_g / tf.nn.l2_normalize(V_v, 0)) * V_v
     c = tf.Variable(tf.zeros([kernel_shape[2] * kernel_shape[3]]), name="c%s" % layer_name)
     conv2 = tf.nn.depthwise_conv2d(
         padded_input,
@@ -164,11 +166,11 @@ def setup_model(vocab_mapping, epoch_steps):
    # Todo: sampled softmax for larger vocabularies
    # losses = tf.nn.sampled_softmax_loss(output_weights, output_bias, last_hidden, labels, candidates, vocab_size, num_true=1, partition_strategy='mod', name='ssl')
 
-    logits = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
-    full_probs = tf.nn.softmax(logits) # adds to 1, for each word
+    multiplied = tf.matmul(last_hidden, tf.transpose(output_weights)) + output_bias
+    logits = tf.nn.softmax(multiplied) # adds to 1, for each word
     rows = tf.expand_dims(tf.constant(range(0, minibatch_size * (sequence_length - 1))), 1)
     indices = tf.concat(1, [rows, labels])
-    probs = tf.gather_nd(full_probs, indices)
+    probs = tf.gather_nd(logits, indices)
     losses = -tf.log(probs)
     loss = tf.reduce_mean(losses)
     perplexity = tf.exp(loss)

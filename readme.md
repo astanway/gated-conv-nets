@@ -36,10 +36,12 @@ The validation process continually loads the latest training weights as both pro
   Moving forward, there are some likely some interesting experiments to be done around various kernel width/layer depth permutations for identical effective context sizes.
  
 ## Performance: 
-In 600k steps, this is able to achieve a test perplexity of 425 Wikitext-2. Below is the validation loss over time:
+In 900k steps, this is able to achieve a test perplexity of 350 Wikitext-2. SOTA is 68.9 (unknown number of steps)[2]. Below is the validation loss over time:
 ![x](https://raw.githubusercontent.com/astanway/gated-conv-nets/master/validation_loss.png)
 
 
 [0] https://arxiv.org/pdf/1609.04309v2.pdf
 
 [1] https://arxiv.org/pdf/1602.07868v3.pdf
+
+[2] https://openreview.net/pdf?id=B184E5qee
