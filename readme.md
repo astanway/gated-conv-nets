@@ -29,7 +29,7 @@ The validation process continually loads the latest training weights as both pro
   
   The authors use a newer technique called the adaptive softmax to approximate the softmax for speed. In this implementation, I use a full softmax, as the vocabulary for Wikitext-2 is not prohibitively large at ~33k. Of course, this will slow things down very much if we tried to train on a bigger dataset like Wikitext-103. However, until I have time to read the adaptive softmax paper [0] and understand how it works, the full softmax suffices.
   
-  In this implementation, I use a depthwise 2d convolution, treating each input embedding dimension as a different channel. As per the paper, I progressively increase the dimensionality and context size as the layers increase. This particular net is 11 layers deep, with 2 residual layers, and an output embedding projection of 256 dimensions. The sequence length is set at 25. I use weight normalization [1], as per the paper. The batch size is set to 500.
+  In this implementation, I use a depthwise 2d convolution, treating each input embedding dimension as a different channel. This particular net is 11 layers deep, with 2 residual layers, and an output embedding projection of 256 dimensions. The kernel width is set to 3 throughout the network, and the sequence length is set at 25. I use weight normalization [1], as per the paper. The batch size is set to 500.
   
   Note: In the original paper, the initial sequence padding is listed to be k/2 (k= kernel width). It should in fact be k-1, as k/2 would allow future context to leak into the current word. I have verified this with the authors and the error will be corrected in the next version of the paper.
   
